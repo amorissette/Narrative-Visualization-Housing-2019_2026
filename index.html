@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boom, Freeze, and Lock-In: American Housing 2019-2026</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-svg-annotation@2.5.1/d3-annotation.min.js"></script>
+<style>
+  :root {
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --series-1:       #2a78d6;
+    --series-ref:     #898781;
+    --border:         rgba(11,11,11,0.10);
+    --accent-soft:    rgba(42,120,214,0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --series-1:       #3987e5;
+      --series-ref:     #898781;
+      --border:         rgba(255,255,255,0.10);
+      --accent-soft:    rgba(57,135,229,0.16);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 24px 20px 48px; }
+  header h1 { font-size: 26px; margin: 0 0 4px; }
+  header p.sub { color: var(--text-secondary); margin: 0 0 20px; font-size: 15px; }
+
+  /* Scene navigation */
+  .nav-row {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .nav-row button.step {
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 18px; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  .nav-row button.step:hover:not(:disabled) { background: var(--accent-soft); }
+  .nav-row button.step:disabled { opacity: 0.35; cursor: default; }
+  .dots { display: flex; gap: 8px; }
+  .dots button {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-secondary); font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .dots button.active { background: var(--series-1); color: #fff; border-color: var(--series-1); }
+  .scene-tag { color: var(--text-muted); font-size: 13px; margin-left: auto; }
+
+  h2#scene-title { font-size: 20px; margin: 6px 0 2px; }
+  p#scene-desc { color: var(--text-secondary); font-size: 15px; margin: 0 0 12px; max-width: 860px; }
+
+  /* Explore controls (scene 4 only) */
+  #controls {
+    display: none; gap: 16px; align-items: center; flex-wrap: wrap;
+    margin: 0 0 12px;
+  }
+  #controls.visible { display: flex; }
+  #controls label { font-size: 14px; color: var(--text-secondary); font-weight: 600; }
+  #controls select {
+    font-size: 14px; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  }
+  .legend { display: none; gap: 18px; font-size: 13px; color: var(--text-secondary); align-items: center; }
+  .legend.visible { display: flex; }
+  .legend .chip { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+
+  /* Chart */
+  #chart-card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 10px 6px; position: relative;
+  }
+  svg { display: block; width: 100%; height: auto; }
+  .gridline line { stroke: var(--gridline); stroke-width: 1; }
+  .gridline path { display: none; }
+  .axis text { fill: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .axis line, .axis path { stroke: var(--baseline); }
+  .axis-label { fill: var(--text-secondary); font-size: 12.5px; }
+  .series-line { fill: none; stroke: var(--series-1); stroke-width: 2.5; }
+  .ref-line { fill: none; stroke: var(--series-ref); stroke-width: 1.8; stroke-dasharray: 5 4; }
+  .direct-label { font-size: 12.5px; font-weight: 600; }
+  .direct-label.main { fill: var(--series-1); }
+  .direct-label.ref { fill: var(--text-muted); }
+
+  /* The line reveal and the annotation fade are CSS animations rather than
+     scripted ones so that the finished state, fully drawn and fully opaque,
+     is what the elements fall back to if the animation never runs. */
+  .series-line { animation: draw-line 900ms ease-out backwards; }
+  @keyframes draw-line {
+    from { stroke-dashoffset: var(--dash-len, 0); }
+    to   { stroke-dashoffset: 0; }
+  }
+  .annotation-group { animation: anno-fade 500ms ease-out 650ms backwards; }
+  @keyframes anno-fade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  /* Set by a timer once the entrance is over, so the finished state does not
+     depend on the animation having run at all. */
+  .series-line.shown { animation: none; stroke-dashoffset: 0; }
+  .annotation-group.shown { animation: none; opacity: 1; }
+
+  /* Annotation template (consistent across scenes) */
+  .annotation-group .annotation path { stroke: var(--text-secondary); fill: none; }
+  .annotation-group .annotation .annotation-subject path { stroke: var(--series-1); stroke-width: 2; }
+  .annotation-group .annotation text { fill: var(--text-primary); }
+  .annotation-group .annotation .annotation-note-title { font-weight: 700; font-size: 13px; }
+  .annotation-group .annotation .annotation-note-label { font-size: 12.5px; fill: var(--text-secondary); }
+  .annotation-group .annotation-note-bg { fill: var(--surface-1); fill-opacity: 0.85; }
+
+  /* Tooltip */
+  #tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18); min-width: 130px; z-index: 5;
+  }
+  #tooltip .tt-date { color: var(--text-muted); font-size: 12px; margin-bottom: 2px; }
+  #tooltip .tt-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+  #tooltip .tt-ref { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .hover-rule { stroke: var(--baseline); stroke-width: 1; }
+  .hover-dot { fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2; }
+
+  footer { margin-top: 18px; color: var(--text-muted); font-size: 12.5px; }
+  footer a { color: var(--text-secondary); }
+  #loading { color: var(--text-muted); padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Boom, Freeze, and Lock-In: American Housing 2019-2026</h1>
+    <p class="sub">Monthly housing market data for 100 U.S. metro areas, January 2019 through May 2026. Source: Redfin Data Center.</p>
+  </header>
+
+  <div class="nav-row">
+    <button class="step" id="btn-prev">&#9668; Back</button>
+    <div class="dots" id="dots"></div>
+    <button class="step" id="btn-next">Next &#9658;</button>
+    <span class="scene-tag" id="scene-tag"></span>
+  </div>
+
+  <h2 id="scene-title"></h2>
+  <p id="scene-desc"></p>
+
+  <div id="controls">
+    <span>
+      <label for="metro-select">Metro area&nbsp;</label>
+      <select id="metro-select"></select>
+    </span>
+    <span>
+      <label for="metric-select">Metric&nbsp;</label>
+      <select id="metric-select"></select>
+    </span>
+    <span class="legend" id="legend">
+      <span><span class="chip" style="background:var(--series-1)"></span><span id="legend-metro"></span></span>
+      <span><span class="chip" style="background:var(--series-ref)"></span>Typical U.S. metro (median of 100)</span>
+    </span>
+  </div>
+
+  <div id="chart-card">
+    <div id="loading">Loading housing data&hellip;</div>
+    <div id="tooltip"></div>
+  </div>
+
+  <footer>
+    Data: <a href="https://www.redfin.com/news/data-center/">Redfin Data Center</a>, monthly metro-level housing market metrics, not seasonally adjusted.
+    Hover any chart for monthly values. CS&nbsp;416 Narrative Visualization. Built with D3 and d3-annotation.
+  </footer>
+</div>
+
+<script>
+// Parameters: the state variables that determine what is on screen.
+const state = {
+  scene: 0,                    // 0..3
+  metro: "Austin, TX",         // explore scene only
+  metric: "median_sale_price"  // explore scene only
+};
+
+const METRICS = {
+  median_sale_price: { label: "Median sale price",        fmt: d => "$" + d3.format(",.0f")(d), fmtShort: d => "$" + d3.format(".3s")(d).replace("k","K"), agg: "median" },
+  median_dom:        { label: "Median days on market",     fmt: d => d3.format(".0f")(d) + " days", fmtShort: d => d3.format(".0f")(d), agg: "median" },
+  homes_sold:        { label: "Homes sold per month",      fmt: d3.format(","), fmtShort: d3.format(".2s"), agg: "median" },
+  new_listings:      { label: "New listings per month",    fmt: d3.format(","), fmtShort: d3.format(".2s"), agg: "median" },
+  active_listings:   { label: "Active listings",           fmt: d3.format(","), fmtShort: d3.format(".2s"), agg: "median" }
+};
+
+const MARGIN = { top: 24, right: 190, bottom: 42, left: 72 };
+const WIDTH = 960, HEIGHT = 500;
+const INNER_W = WIDTH - MARGIN.left - MARGIN.right;
+const INNER_H = HEIGHT - MARGIN.top - MARGIN.bottom;
+
+let raw = [], byMetro = new Map(), agg = {}, metros = [];
+
+// Each scene supplies its title, description, axis label, series, and annotations.
+const scenes = [
+  {
+    tag: "Scene 1 of 4",
+    title: "Prices rose 80% and stayed there",
+    desc: "Median sale price for the typical U.S. metro, measured as the median across all 100 metros. Mortgage rates fell below 3% during the pandemic and prices climbed steeply. When the Fed began raising rates in 2022, the climb slowed but never reversed. Hover the line to read any month, then press Next.",
+    yLabel: "Median sale price (typical metro, $)",
+    metric: "median_sale_price",
+    series: () => agg.median_sale_price,
+    annotations: (series) => [
+      note(series, "2020-03", "COVID-19 hits", "Lockdowns begin in March 2020. Mortgage rates fall below 3% soon after and buyer demand surges.", 30, 90),
+      note(series, "2022-03", "Rate hikes begin", "The Fed starts raising rates in March 2022. Prices flatten for about a year but do not fall.", 80, 192),
+      note(series, "2026-05", "Up 80% since 2019", "The typical metro reaches a median price of $404K in May 2026, up from $224K in January 2019.", 8, 245)
+    ]
+  },
+  {
+    tag: "Scene 2 of 4",
+    title: "How fast homes sold: six weeks to 19 days, then back",
+    desc: "Price is only one measure. Median days on market shows how quickly homes sold. Before the pandemic the typical metro took about six weeks. At the March 2022 low it took 19 days. Higher rates then cooled demand, and by 2026 the pace had returned to where it started. Hover the line to read any month.",
+    yLabel: "Median days on market (typical metro)",
+    metric: "median_dom",
+    series: () => agg.median_dom,
+    annotations: (series) => [
+      note(series, "2022-03", "Fastest market: 19 days", "In March 2022 homes in the typical metro sold in under three weeks.", 30, 70),
+      note(series, "2019-03", "The old normal", "Before the pandemic, homes took six to seven weeks to sell.", 30, 90),
+      note(series, "2026-05", "Back to the old pace", "By 2026 days on market matched pre-pandemic levels, even though prices stayed high.", 8, 150)
+    ]
+  },
+  {
+    tag: "Scene 3 of 4",
+    title: "Why prices did not fall: supply dried up",
+    desc: "Owners holding 3% mortgages had little reason to sell once rates passed 7%, an effect known as rate lock-in. Active listings across the 100 metros fell 39% below 2019 levels by July 2023, which held prices up even as demand weakened. Supply has since recovered most of the way. Hover the line for monthly totals.",
+    yLabel: "Active listings (total across 100 metros)",
+    metric: "active_listings",
+    series: () => agg.active_listings_sum,
+    annotations: (series) => [
+      note(series, "2019-01", "Pre-pandemic supply", "About 1.06 million homes listed across these 100 metros in January 2019.", 40, 80),
+      note(series, "2023-07", "The bottom: 649K listings", "Supply falls 39% below 2019 as owners with cheap mortgages stay put.", -50, 95),
+      note(series, "2026-05", "Supply recovers", "937K listings in May 2026, within 12% of the 2019 level.", -110, 170)
+    ]
+  },
+  {
+    tag: "Scene 4 of 4: Explore",
+    title: "Explore the metros",
+    desc: "National medians hide a lot of local variation. Pick any metro and metric below. The dashed gray line is the typical U.S. metro for comparison, and the annotation marks the selected series' all-time peak. Austin, TX had the sharpest rise and decline, though Chicago, IL is still setting record prices. Hover the lines to compare them month by month.",
+    yLabel: null, // set dynamically from metric
+    metric: null, // driven by state.metric
+    series: null, // driven by state.metro + state.metric
+    annotations: null // computed dynamically
+  }
+];
+
+// Anchors an annotation to a month in the series. dx/dy are tuned per note
+// so the callouts don't overlap each other or the line.
+function note(series, monthKey, title, label, dx, dy) {
+  const d = series.find(p => keyOf(p.date) === monthKey);
+  if (!d) return null;
+  return { d, title, label, dx, dy };
+}
+const keyOf = d3.timeFormat("%Y-%m");
+const parseMonth = d3.timeParse("%Y-%m-%d");
+const fmtMonth = d3.timeFormat("%b %Y");
+
+// Load the CSV, then build the cross-metro aggregates the first three scenes use.
+d3.csv("housing_data.csv", r => ({
+  date: parseMonth(r.month),
+  metro: r.metro,
+  median_sale_price: +r.median_sale_price || null,
+  median_dom: r.median_dom === "" ? null : +r.median_dom,
+  homes_sold: +r.homes_sold || null,
+  new_listings: +r.new_listings || null,
+  active_listings: +r.active_listings || null
+})).then(data => {
+  raw = data.filter(d => d.date);
+  byMetro = d3.group(raw, d => d.metro);
+  metros = Array.from(byMetro.keys()).sort(d3.ascending);
+
+  // Cross-metro aggregates per month
+  const byMonth = d3.group(raw, d => +d.date);
+  const months = Array.from(byMonth.keys()).sort(d3.ascending);
+  const aggSeries = (metric, reducer) => months.map(m => {
+    const vals = byMonth.get(m).map(d => d[metric]).filter(v => v != null);
+    return { date: new Date(m), value: reducer(vals) };
+  }).filter(d => d.value != null);
+
+  agg.median_sale_price   = aggSeries("median_sale_price", d3.median);
+  agg.median_dom          = aggSeries("median_dom", d3.median);
+  agg.homes_sold          = aggSeries("homes_sold", d3.median);
+  agg.new_listings        = aggSeries("new_listings", d3.median);
+  agg.active_listings     = aggSeries("active_listings", d3.median);
+  agg.active_listings_sum = aggSeries("active_listings", d3.sum);
+
+  initUI();
+  render();
+}).catch(err => {
+  document.getElementById("loading").textContent = "Failed to load housing_data.csv: " + err.message;
+});
+
+// Triggers: every listener changes a parameter and then re-renders.
+function initUI() {
+  document.getElementById("loading").remove();
+
+  d3.select("#btn-prev").on("click", () => { if (state.scene > 0) { state.scene--; render(); } });
+  d3.select("#btn-next").on("click", () => { if (state.scene < scenes.length - 1) { state.scene++; render(); } });
+  d3.select("body").on("keydown", (ev) => {
+    if (ev.key === "ArrowRight" && state.scene < scenes.length - 1) { state.scene++; render(); }
+    if (ev.key === "ArrowLeft" && state.scene > 0) { state.scene--; render(); }
+  });
+
+  d3.select("#dots").selectAll("button")
+    .data(scenes).join("button")
+    .attr("title", s => s.tag)
+    .text((s, i) => i + 1)
+    .on("click", (ev, s) => { state.scene = scenes.indexOf(s); render(); });
+
+  const metroSel = d3.select("#metro-select");
+  metroSel.selectAll("option").data(metros).join("option")
+    .attr("value", d => d).text(d => d);
+  metroSel.property("value", state.metro)
+    .on("change", function() { state.metro = this.value; render(); });
+
+  const metricSel = d3.select("#metric-select");
+  metricSel.selectAll("option").data(Object.keys(METRICS)).join("option")
+    .attr("value", d => d).text(d => METRICS[d].label);
+  metricSel.property("value", state.metric)
+    .on("change", function() { state.metric = this.value; render(); });
+}
+
+// Single entry point for drawing. Reads state and rebuilds the scene from it.
+function render() {
+  const sc = scenes[state.scene];
+  const isExplore = state.scene === 3;
+
+  // Headings, nav buttons, and control visibility
+  d3.select("#scene-tag").text(sc.tag);
+  d3.select("#scene-title").text(sc.title);
+  d3.select("#scene-desc").text(sc.desc);
+  d3.select("#btn-prev").property("disabled", state.scene === 0);
+  d3.select("#btn-next").property("disabled", state.scene === scenes.length - 1);
+  d3.select("#dots").selectAll("button").classed("active", (s, i) => i === state.scene);
+  d3.select("#controls").classed("visible", isExplore);
+  d3.select("#legend").classed("visible", isExplore);
+  d3.select("#legend-metro").text(state.metro);
+
+  // Resolve this scene's series + metric config
+  let metricKey, series, refSeries = null, annos, yLabel;
+  if (!isExplore) {
+    metricKey = sc.metric;
+    series = sc.series();
+    annos = sc.annotations(series).filter(Boolean);
+    yLabel = sc.yLabel;
+  } else {
+    metricKey = state.metric;
+    const rows = (byMetro.get(state.metro) || [])
+      .filter(d => d[metricKey] != null)
+      .map(d => ({ date: d.date, value: d[metricKey] }))
+      .sort((a, b) => a.date - b.date);
+    series = rows;
+    refSeries = agg[metricKey];
+    yLabel = METRICS[metricKey].label + ", " + state.metro;
+    // Dynamic annotation: mark the metro's all-time peak for this metric
+    const peak = d3.greatest(series, d => d.value);
+    if (peak) {
+      const last = series[series.length - 1];
+      const offPeak = (last.value - peak.value) / peak.value;
+      const isLatest = keyOf(peak.date) === keyOf(last.date);
+      annos = [{
+        d: peak,
+        title: "Peak: " + METRICS[metricKey].fmt(peak.value),
+        label: isLatest
+          ? "All-time high, reached in " + fmtMonth(peak.date) + " and still rising."
+          : "Peaked in " + fmtMonth(peak.date) + ". The latest value is " + d3.format("+.0%")(offPeak) + " against that peak.",
+        dx: peak.date < new Date(2023, 0, 1) ? 60 : -80,
+        dy: 175
+      }];
+    } else annos = [];
+  }
+
+  drawChart(series, refSeries, annos, yLabel, METRICS[metricKey]);
+}
+
+function drawChart(series, refSeries, annos, yLabel, mconf) {
+  // Clear and rebuild the SVG (scene template)
+  d3.select("#chart-card svg").remove();
+  const svg = d3.select("#chart-card").append("svg")
+    .attr("viewBox", `0 0 ${WIDTH} ${HEIGHT}`);
+  const g = svg.append("g").attr("transform", `translate(${MARGIN.left},${MARGIN.top})`);
+
+  const all = refSeries ? series.concat(refSeries) : series;
+  const x = d3.scaleTime()
+    .domain(d3.extent(all, d => d.date))
+    .range([0, INNER_W]);
+  const y = d3.scaleLinear()
+    .domain([0, d3.max(all, d => d.value) * 1.08]).nice()
+    .range([INNER_H, 0]);
+
+  // Gridlines and axes
+  g.append("g").attr("class", "gridline")
+    .call(d3.axisLeft(y).ticks(6).tickSize(-INNER_W).tickFormat(""));
+  g.append("g").attr("class", "axis")
+    .attr("transform", `translate(0,${INNER_H})`)
+    .call(d3.axisBottom(x).ticks(9));
+  g.append("g").attr("class", "axis")
+    .call(d3.axisLeft(y).ticks(6).tickFormat(mconf.fmtShort));
+  g.append("text").attr("class", "axis-label")
+    .attr("transform", "rotate(-90)")
+    .attr("x", -INNER_H / 2).attr("y", -56)
+    .attr("text-anchor", "middle")
+    .text(yLabel);
+
+  const line = d3.line()
+    .x(d => x(d.date)).y(d => y(d.value))
+    .curve(d3.curveMonotoneX);
+
+  // Reference series (explore scene): typical metro
+  if (refSeries) {
+    g.append("path").datum(refSeries).attr("class", "ref-line").attr("d", line);
+    const rLast = refSeries[refSeries.length - 1];
+    g.append("text").attr("class", "direct-label ref")
+      .attr("x", x(rLast.date) + 8).attr("y", y(rLast.value) + 4)
+      .text("Typical metro");
+  }
+
+  // Main series. The dash length feeds the CSS draw-in keyframe; with no
+  // animation the offset stays 0, which is the fully drawn line.
+  const path = g.append("path").datum(series).attr("class", "series-line").attr("d", line);
+  const len = Math.ceil(path.node().getTotalLength());
+  path.attr("stroke-dasharray", `${len} ${len}`).style("--dash-len", len);
+
+  // Direct label at the end of the main series
+  const last = series[series.length - 1];
+  if (last) {
+    g.append("text").attr("class", "direct-label main")
+      .attr("x", x(last.date) + 8)
+      .attr("y", y(last.value) + (refSeries && Math.abs(y(last.value) - y(refSeries[refSeries.length - 1].value)) < 16 ? -12 : 4))
+      .text(mconf.fmt(last.value));
+  }
+
+  // Annotations fade in once the line has finished drawing.
+  const annoGroup = g.append("g").attr("class", "annotation-group");
+  const annotations = annos.map(a => ({
+    note: { title: a.title, label: a.label, wrap: 190, padding: 4 },
+    x: x(a.d.date), y: y(a.d.value),
+    dx: a.dx, dy: a.dy,
+    subject: { radius: 7, radiusPadding: 2 },
+    type: d3.annotationCalloutCircle
+  }));
+  annoGroup.call(d3.annotation().notePadding(6).annotations(annotations));
+
+  // The entrance is decorative. Once it has had time to play, pin both the line
+  // and the annotations to their finished state so nothing depends on it.
+  setTimeout(() => { path.classed("shown", true); annoGroup.classed("shown", true); }, 1200);
+
+  attachHover(svg, g, x, y, series, refSeries, mconf);
+}
+
+// Crosshair and tooltip, available in every scene.
+function attachHover(svg, g, x, y, series, refSeries, mconf) {
+  const tooltip = d3.select("#tooltip");
+  const bisect = d3.bisector(d => d.date).center;
+
+  const rule = g.append("line").attr("class", "hover-rule")
+    .attr("y1", 0).attr("y2", INNER_H).style("display", "none");
+  const dot = g.append("circle").attr("class", "hover-dot")
+    .attr("r", 5).style("display", "none");
+
+  svg.append("rect")
+    .attr("x", MARGIN.left).attr("y", MARGIN.top)
+    .attr("width", INNER_W).attr("height", INNER_H)
+    .attr("fill", "transparent")
+    .on("mousemove", (ev) => {
+      const [mx] = d3.pointer(ev, g.node());
+      const i = bisect(series, x.invert(mx));
+      const d = series[i];
+      if (!d) return;
+      rule.style("display", null).attr("x1", x(d.date)).attr("x2", x(d.date));
+      dot.style("display", null).attr("cx", x(d.date)).attr("cy", y(d.value));
+      let html = `<div class="tt-date">${fmtMonth(d.date)}</div><div class="tt-val">${mconf.fmt(d.value)}</div>`;
+      if (refSeries) {
+        const rd = refSeries[bisect(refSeries, d.date)];
+        if (rd) html += `<div class="tt-ref">Typical metro: ${mconf.fmt(rd.value)}</div>`;
+      }
+      const card = document.getElementById("chart-card").getBoundingClientRect();
+      const px = ev.clientX - card.left, py = ev.clientY - card.top;
+      tooltip.style("display", "block").html(html)
+        .style("left", Math.min(px + 14, card.width - 170) + "px")
+        .style("top", (py - 10) + "px");
+    })
+    .on("mouseleave", () => {
+      rule.style("display", "none");
+      dot.style("display", "none");
+      tooltip.style("display", "none");
+    });
+}
+</script>
+</body>
+</html>
