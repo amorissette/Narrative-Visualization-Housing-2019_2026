@@ -85,6 +85,7 @@
   .legend { display: none; gap: 18px; font-size: 13px; color: var(--text-secondary); align-items: center; }
   .legend.visible { display: flex; }
   .legend .chip { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend .chip-faint { background: var(--text-muted); opacity: 0.35; }
 
   /* Chart */
   #chart-card {
@@ -98,6 +99,7 @@
   .axis line, .axis path { stroke: var(--baseline); }
   .axis-label { fill: var(--text-secondary); font-size: 12.5px; }
   .series-line { fill: none; stroke: var(--series-1); stroke-width: 2.5; }
+  .context-line { fill: none; stroke: var(--text-muted); stroke-width: 1; opacity: 0.22; }
   .ref-line { fill: none; stroke: var(--series-ref); stroke-width: 1.8; stroke-dasharray: 5 4; }
   .direct-label { font-size: 12.5px; font-weight: 600; }
   .direct-label.main { fill: var(--series-1); }
@@ -173,9 +175,13 @@
       <label for="metric-select">Metric&nbsp;</label>
       <select id="metric-select"></select>
     </span>
+    <span>
+      <label for="show-all"><input type="checkbox" id="show-all" checked>&nbsp;Show all 100 metros</label>
+    </span>
     <span class="legend" id="legend">
       <span><span class="chip" style="background:var(--series-1)"></span><span id="legend-metro"></span></span>
       <span><span class="chip" style="background:var(--series-ref)"></span>Typical U.S. metro (median of 100)</span>
+      <span id="legend-context"><span class="chip chip-faint"></span>Other metros</span>
     </span>
   </div>
 
@@ -195,7 +201,8 @@
 const state = {
   scene: 0,                    // 0..3
   metro: "Austin, TX",         // explore scene only
-  metric: "median_sale_price"  // explore scene only
+  metric: "median_sale_price", // explore scene only
+  showAll: true                // explore scene only: overview of all 100 metros
 };
 
 const METRICS = {
@@ -257,7 +264,7 @@ const scenes = [
   {
     tag: "Scene 4 of 4: Explore",
     title: "Explore the metros",
-    desc: "National medians hide a lot of local variation. Pick any metro and metric below. The dashed gray line is the typical U.S. metro for comparison, and the annotation marks the selected series' all-time peak. Austin, TX had the sharpest rise and decline, though Chicago, IL is still setting record prices. Hover the lines to compare them month by month.",
+    desc: "This starts as an overview of all 100 metros at once, with the one you pick highlighted against the rest. Untick the box to drop the others and rescale to the selection, which is worth doing for a smaller metro, since San Francisco reaching $1.8M stretches the axis. Hover any month for details on that metro. Austin, TX had the sharpest rise and decline, though Chicago, IL is still setting record prices.",
     yLabel: null, // set dynamically from metric
     metric: null, // driven by state.metric
     series: null, // driven by state.metro + state.metric
@@ -339,6 +346,9 @@ function initUI() {
     .attr("value", d => d).text(d => METRICS[d].label);
   metricSel.property("value", state.metric)
     .on("change", function() { state.metric = this.value; render(); });
+
+  d3.select("#show-all").property("checked", state.showAll)
+    .on("change", function() { state.showAll = this.checked; render(); });
 }
 
 // Single entry point for drawing. Reads state and rebuilds the scene from it.
@@ -356,9 +366,10 @@ function render() {
   d3.select("#controls").classed("visible", isExplore);
   d3.select("#legend").classed("visible", isExplore);
   d3.select("#legend-metro").text(state.metro);
+  d3.select("#legend-context").style("display", state.showAll ? null : "none");
 
   // Resolve this scene's series + metric config
-  let metricKey, series, refSeries = null, annos, yLabel;
+  let metricKey, series, refSeries = null, annos, yLabel, contextSeries = null;
   if (!isExplore) {
     metricKey = sc.metric;
     series = sc.series();
@@ -373,6 +384,15 @@ function render() {
     series = rows;
     refSeries = agg[metricKey];
     yLabel = METRICS[metricKey].label + ", " + state.metro;
+    // Overview of every metro, drawn behind the selection. The selected metro is
+    // the highlighted field value; the rest are context.
+    if (state.showAll) {
+      contextSeries = metros.filter(m => m !== state.metro).map(m =>
+        byMetro.get(m).filter(d => d[metricKey] != null)
+          .map(d => ({ date: d.date, value: d[metricKey] }))
+          .sort((a, b) => a.date - b.date)
+      ).filter(s => s.length);
+    }
     // Dynamic annotation: mark the metro's all-time peak for this metric
     const peak = d3.greatest(series, d => d.value);
     if (peak) {
@@ -386,22 +406,26 @@ function render() {
           ? "All-time high, reached in " + fmtMonth(peak.date) + " and still rising."
           : "Peaked in " + fmtMonth(peak.date) + ". The latest value is " + d3.format("+.0%")(offPeak) + " against that peak.",
         dx: peak.date < new Date(2023, 0, 1) ? 60 : -80,
-        dy: 175
+        dy: 175,
+        // The overview rescales the axis, so let drawChart move this note up
+        // if the anchor ends up too low to fit the callout beneath it.
+        auto: true
       }];
     } else annos = [];
   }
 
-  drawChart(series, refSeries, annos, yLabel, METRICS[metricKey]);
+  drawChart(series, refSeries, annos, yLabel, METRICS[metricKey], contextSeries, metricKey);
 }
 
-function drawChart(series, refSeries, annos, yLabel, mconf) {
+function drawChart(series, refSeries, annos, yLabel, mconf, contextSeries, metricKey) {
   // Clear and rebuild the SVG (scene template)
   d3.select("#chart-card svg").remove();
   const svg = d3.select("#chart-card").append("svg")
     .attr("viewBox", `0 0 ${WIDTH} ${HEIGHT}`);
   const g = svg.append("g").attr("transform", `translate(${MARGIN.left},${MARGIN.top})`);
 
-  const all = refSeries ? series.concat(refSeries) : series;
+  let all = refSeries ? series.concat(refSeries) : series;
+  if (contextSeries) all = all.concat(...contextSeries); // overview must fit every metro
   const x = d3.scaleTime()
     .domain(d3.extent(all, d => d.date))
     .range([0, INNER_W]);
@@ -426,6 +450,14 @@ function drawChart(series, refSeries, annos, yLabel, mconf) {
   const line = d3.line()
     .x(d => x(d.date)).y(d => y(d.value))
     .curve(d3.curveMonotoneX);
+
+  // Every other metro, drawn first so the selection sits on top of it.
+  if (contextSeries) {
+    const ctx = g.append("g").attr("class", "context-layer");
+    ctx.selectAll("path").data(contextSeries).join("path")
+      .attr("class", "context-line")
+      .attr("d", line);
+  }
 
   // Reference series (explore scene): typical metro
   if (refSeries) {
@@ -453,24 +485,40 @@ function drawChart(series, refSeries, annos, yLabel, mconf) {
 
   // Annotations fade in once the line has finished drawing.
   const annoGroup = g.append("g").attr("class", "annotation-group");
-  const annotations = annos.map(a => ({
+  const NOTE_ROOM = 80; // rough height of a callout, used for the fit test below
+  const annotations = annos.map(a => {
+    let dy = a.dy;
+    if (a.auto && y(a.d.value) + dy + NOTE_ROOM > INNER_H) dy = -Math.abs(dy) + 75;
+    return {
     note: { title: a.title, label: a.label, wrap: 190, padding: 4 },
     x: x(a.d.date), y: y(a.d.value),
-    dx: a.dx, dy: a.dy,
+    dx: a.dx, dy: dy,
     subject: { radius: 7, radiusPadding: 2 },
     type: d3.annotationCalloutCircle
-  }));
+  };});
   annoGroup.call(d3.annotation().notePadding(6).annotations(annotations));
 
   // The entrance is decorative. Once it has had time to play, pin both the line
   // and the annotations to their finished state so nothing depends on it.
   setTimeout(() => { path.classed("shown", true); annoGroup.classed("shown", true); }, 1200);
 
-  attachHover(svg, g, x, y, series, refSeries, mconf);
+  attachHover(svg, g, x, y, series, refSeries, mconf, metricKey);
+}
+
+// A few extra attributes for the hovered month, so a datapoint can be read
+// without changing the metric. Kept short on purpose.
+const EXTRA_FIELDS = ["median_sale_price", "homes_sold", "median_dom"];
+function extraDetails(metro, date, metricKey) {
+  const rows = byMetro.get(metro);
+  if (!rows) return [];
+  const row = rows.find(r => +r.date === +date);
+  if (!row) return [];
+  return EXTRA_FIELDS.filter(f => f !== metricKey && row[f] != null)
+    .map(f => ({ label: METRICS[f].label, value: METRICS[f].fmt(row[f]) }));
 }
 
 // Crosshair and tooltip, available in every scene.
-function attachHover(svg, g, x, y, series, refSeries, mconf) {
+function attachHover(svg, g, x, y, series, refSeries, mconf, metricKey) {
   const tooltip = d3.select("#tooltip");
   const bisect = d3.bisector(d => d.date).center;
 
@@ -494,6 +542,9 @@ function attachHover(svg, g, x, y, series, refSeries, mconf) {
       if (refSeries) {
         const rd = refSeries[bisect(refSeries, d.date)];
         if (rd) html += `<div class="tt-ref">Typical metro: ${mconf.fmt(rd.value)}</div>`;
+        extraDetails(state.metro, d.date, metricKey).forEach(e => {
+          html += `<div class="tt-ref">${e.label}: ${e.value}</div>`;
+        });
       }
       const card = document.getElementById("chart-card").getBoundingClientRect();
       const px = ev.clientX - card.left, py = ev.clientY - card.top;
