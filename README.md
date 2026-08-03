@@ -2,7 +2,7 @@
 
 CS 416 narrative visualization. An interactive slide show built with D3 and d3-annotation.
 
-Live site: https://amorissette.github.io/Narrative-Visualization-US-Housing-2019-2026/
+Live site: https://amorissette.github.io/Narrative-Visualization-Housing-2019_2026/
 
 Four scenes on the 2019-2026 U.S. housing market, using monthly
 [Redfin Data Center](https://www.redfin.com/news/data-center/) metrics for 100 metro areas:
